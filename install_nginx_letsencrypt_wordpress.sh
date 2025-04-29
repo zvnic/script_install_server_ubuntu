@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Скрипт установки Nginx и Let's Encrypt для WordPress в Docker
-# Для домена: karmet48.ru
+# Для домена: domain.ru
 
 set -e
 
 # Параметры
-DOMAIN="karmet48.ru"
+DOMAIN="domain.ru"
 EMAIL="admin@${DOMAIN}" # Измените на свой реальный email
 WP_CONTAINER_NAME="wordpress"
 WP_CONTAINER_PORT="80"  # Порт, на котором работает WordPress в Docker
