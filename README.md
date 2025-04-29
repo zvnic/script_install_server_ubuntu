@@ -17,10 +17,10 @@
 wget https://github.com/zvnic/script_install_server_ubuntu/blob/main/start_server.sh
 
 # 2. Настройка прав на выполнение
-chmod +x server-setup.sh
+chmod +x start_server.sh
 
 # 3. Запуск с правами администратора
-sudo ./server-setup.sh
+sudo ./start_server.sh
 ```
 
 ## Настройка модулей
