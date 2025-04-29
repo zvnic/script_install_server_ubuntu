@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Скрипт установки Nginx и Let's Encrypt для WordPress в Docker
-# Для домена: domain.ru
+# Для домена: karmet48.ru
 
 set -e
 
 # Параметры
-DOMAIN="domain.ru"
+DOMAIN="karmet48.ru"
 EMAIL="admin@${DOMAIN}" # Измените на свой реальный email
 WP_CONTAINER_NAME="wordpress"
 WP_CONTAINER_PORT="80"  # Порт, на котором работает WordPress в Docker
@@ -46,16 +46,14 @@ apt update && apt upgrade -y || error "Не удалось обновить па
 log "Установка Nginx и необходимых пакетов..."
 apt install -y nginx curl software-properties-common gnupg2 ca-certificates lsb-release debian-archive-keyring || error "Не удалось установить необходимые пакеты."
 
-# Настройка Nginx
-log "Настройка Nginx для проксирования WordPress..."
+# Настройка базовой конфигурации Nginx (только HTTP)
+log "Настройка базовой HTTP конфигурации Nginx..."
 cat > /etc/nginx/sites-available/${DOMAIN} << EOF
 server {
     listen 80;
     listen [::]:80;
     server_name ${DOMAIN} www.${DOMAIN};
 
-    # Let's Encrypt изменит эту конфигурацию, добавив редирект на HTTPS
-    # Оставляем базовую конфигурацию HTTP для первоначальной проверки домена
     location / {
         proxy_pass http://localhost:${WP_CONTAINER_PORT};
         proxy_set_header Host \$host;
@@ -64,52 +62,6 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header X-Forwarded-Host \$host;
         proxy_set_header X-Forwarded-Port \$server_port;
-    }
-}
-
-# Добавляем отдельную конфигурацию для HTTPS
-# Certbot будет использовать и модифицировать этот блок
-server {
-    # HTTPS-конфигурация (будет активирована Certbot)
-    # Сервер будет слушать на 443 порту после настройки Certbot
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name ${DOMAIN} www.${DOMAIN};
-    
-    # SSL параметры (будут добавлены Certbot)
-    # Certbot добавит директивы ssl_certificate и ssl_certificate_key
-    
-    # Дополнительные настройки безопасности
-    ssl_session_timeout 1d;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_tickets off;
-    
-    # Современные настройки безопасности
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers off;
-    
-    # OCSP stapling
-    ssl_stapling on;
-    ssl_stapling_verify on;
-    
-    # Заголовки безопасности
-    add_header Strict-Transport-Security "max-age=63072000" always;
-    add_header X-Content-Type-Options nosniff;
-    add_header X-Frame-Options SAMEORIGIN;
-    add_header X-XSS-Protection "1; mode=block";
-    
-    # Проксирование к WordPress
-    location / {
-        proxy_pass http://localhost:${WP_CONTAINER_PORT};
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
-        proxy_set_header X-Forwarded-Port \$server_port;
-        
-        # WordPress-специфичные заголовки для HTTPS
-        proxy_set_header X-Forwarded-Ssl on;
         
         # Настройки для больших файлов WordPress
         client_max_body_size 50M;
@@ -143,9 +95,11 @@ if [ -f /etc/nginx/sites-enabled/default ]; then
 fi
 
 # Проверка конфигурации Nginx
+log "Проверка конфигурации Nginx..."
 nginx -t || error "Ошибка в конфигурации Nginx."
 
 # Перезапуск Nginx
+log "Перезапуск Nginx..."
 systemctl restart nginx || error "Не удалось перезапустить Nginx."
 
 # Установка Certbot для Let's Encrypt
@@ -159,6 +113,39 @@ certbot --nginx -d ${DOMAIN} -d www.${DOMAIN} --non-interactive --agree-tos --em
 # Проверяем успешность установки сертификата
 if [ -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
     log "SSL-сертификат успешно установлен."
+    
+    # Добавляем улучшенные настройки HTTPS
+    log "Настройка оптимизированной HTTPS конфигурации..."
+    
+    # Создаем файл с оптимизированными параметрами SSL
+    cat > /etc/nginx/conf.d/ssl-params.conf << EOF
+# Оптимизированные параметры SSL
+ssl_session_timeout 1d;
+ssl_session_cache shared:SSL:10m;
+ssl_session_tickets off;
+
+# Современные настройки безопасности
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+
+# OCSP stapling
+ssl_stapling on;
+ssl_stapling_verify on;
+resolver 8.8.8.8 8.8.4.4 valid=300s;
+resolver_timeout 5s;
+
+# Заголовки безопасности
+add_header Strict-Transport-Security "max-age=63072000" always;
+add_header X-Content-Type-Options nosniff;
+add_header X-Frame-Options SAMEORIGIN;
+add_header X-XSS-Protection "1; mode=block";
+EOF
+
+    log "Проверка обновленной конфигурации Nginx..."
+    nginx -t || warning "Ошибка в обновленной конфигурации Nginx. Откатываемся к базовой конфигурации."
+    
+    log "Перезагрузка Nginx с новыми параметрами..."
+    systemctl restart nginx || warning "Не удалось перезапустить Nginx с новыми параметрами."
     
     # Добавляем настройки для WordPress в контейнере для работы с HTTPS
     log "Проверка настроек WordPress для HTTPS..."
@@ -174,7 +161,7 @@ fi
 
 # Настройка автообновления сертификатов
 log "Настройка автоматического обновления сертификатов..."
-echo "0 3 * * * root certbot renew --quiet" > /etc/cron.d/certbot-renew
+echo "0 3 * * * root certbot renew --quiet --post-hook 'systemctl reload nginx'" > /etc/cron.d/certbot-renew
 chmod 644 /etc/cron.d/certbot-renew
 
 # Настройка брандмауэра
@@ -191,7 +178,7 @@ else
 fi
 
 log "Установка и настройка завершена!"
-log "После настройки DNS, WordPress будет доступен по адресу: https://${DOMAIN}"
+log "WordPress доступен по адресу: https://${DOMAIN}"
 
 # Проверка WordPress-контейнера
 if docker ps | grep -q "${WP_CONTAINER_NAME}"; then
