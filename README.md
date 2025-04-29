@@ -14,7 +14,7 @@
 
 ```bash
 # 1. Клонирование репозитория или загрузка скрипта
-wget [https://github.com/zvnic/script_install_server_ubuntu/blob/main/start_server.sh](https://raw.githubusercontent.com/zvnic/script_install_server_ubuntu/refs/heads/main/start_server.sh)
+wget https://github.com/zvnic/script_install_server_ubuntu/blob/main/start_server.sh
 
 # 2. Настройка прав на выполнение
 chmod +x start_server.sh
