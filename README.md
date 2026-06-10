@@ -13,15 +13,22 @@
 ## Быстрый старт
 
 ```bash
-# 1. Клонирование репозитория или загрузка скрипта
-wget https://github.com/zvnic/script_install_server_ubuntu/blob/main/start_server.sh
+# 1. Загрузка скрипта (raw-ссылка на сырой файл, не на страницу GitHub)
+curl -fsSLO https://raw.githubusercontent.com/zvnic/script_install_server_ubuntu/main/start_server.sh
+# или через wget:
+# wget https://raw.githubusercontent.com/zvnic/script_install_server_ubuntu/main/start_server.sh
 
 # 2. Настройка прав на выполнение
 chmod +x start_server.sh
 
-# 3. Запуск с правами администратора
+# 3. (опционально) Отредактируйте флаги модулей и параметры в начале файла
+nano start_server.sh
+
+# 4. Запуск с правами администратора
 sudo ./start_server.sh
 ```
+
+> ⚠️ Старая ссылка вида `github.com/.../blob/main/...` отдаёт HTML-страницу, а не сам скрипт — используйте `raw.githubusercontent.com`.
 
 ## Настройка модулей
 
@@ -44,27 +51,37 @@ ENABLE_BACKUP=0             # Настройка резервного копир
 | `CREATE_USER` | Создание нового пользователя с правами sudo |
 | `SSH_CONFIG` | Защищенная настройка SSH |
 | `FIREWALL` | Настройка файрвола UFW |
-| `FAIL2BAN` | Установка и настройка Fail2Ban |
+| `FAIL2BAN` | Fail2Ban на systemd-backend (взаимоисключаемо с CrowdSec) |
 | `CROWDSEC` | Установка CrowdSec (альтернатива Fail2Ban) |
+| `SYSCTL_HARDENING` | Хардненинг ядра через `/etc/sysctl.d/` |
 | `LYNIS` | Установка Lynis для аудита безопасности |
-| `AUTO_UPDATES` | Настройка автоматических обновлений |
-| `LOGWATCH` | Мониторинг логов системы |
-| `BACKUP` | Настройка резервного копирования |
-| `TIMEZONE` | Настройка часового пояса и NTP |
+| `AUTO_UPDATES` | Автоматические обновления безопасности + авто-reboot 02:00 |
+| `LOGWATCH` | Мониторинг логов (требует настроенного MTA) |
+| `BACKUP` | Резервное копирование через restic + systemd timer |
+| `TIMEZONE` | Часовой пояс и NTP (systemd-timesyncd или chrony) |
 | `AUDIT` | Установка auditd для аудита системы |
 | `RKHUNTER` | Установка rootkit hunter |
-| `APPARMOR` | Настройка AppArmor |
+| `APPARMOR` | Проверка статуса AppArmor (в 24.04 включён по умолчанию) |
 
 ## Настройка параметров
 
 Вы можете настроить основные параметры в начале скрипта:
 
 ```bash
-SSH_PORT=2222               # Порт SSH
-NEW_USER="master"           # Имя нового пользователя
-TIMEZONE="Europe/Moscow"    # Часовой пояс
-BACKUP_DIR="/var/backups/system"  # Директория для бэкапов
+SSH_PORT=2222                       # Порт SSH
+NEW_USER="master"                   # Имя нового пользователя
+TIMEZONE="Europe/Moscow"            # Часовой пояс
+USE_CHRONY=0                        # 1 = chrony, 0 = встроенный systemd-timesyncd
+ALLOW_HTTP=1                        # Открыть порты 80/443 в файрволе
+BACKUP_REPO="/var/backups/restic"   # Репозиторий restic для бэкапов
+NONINTERACTIVE=0                    # 1 = без вопросов (CI/автоматизация)
+
+# SSH-ключ нового пользователя (любой непустой вариант):
+PUBKEY=""                           # содержимое ключа напрямую
+PUBKEY_SRC=""                       # путь/URL до файла, напр. https://github.com/USER.keys
 ```
+
+> 🔑 **Защита от блокировки:** если ключ не задан (`PUBKEY`/`PUBKEY_SRC`) и `authorized_keys` пуст, скрипт НЕ отключит парольный вход, чтобы вы не потеряли доступ к серверу.
 
 ## Логирование
 
