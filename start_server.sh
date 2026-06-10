@@ -47,6 +47,11 @@ NONINTERACTIVE=0                    # 1 = не задавать вопросов
 PUBKEY=""
 PUBKEY_SRC=""
 
+# Если ключей нет (ни PUBKEY/PUBKEY_SRC, ни в authorized_keys) — сгенерировать пару.
+# Приватный ключ сохраняется на сервере — ОБЯЗАТЕЛЬНО скачайте его и удалите с сервера!
+GENERATE_SSH_KEY=1
+SSH_KEY_TYPE="ed25519"              # тип генерируемого ключа
+
 # ======== СЛУЖЕБНОЕ ========
 export DEBIAN_FRONTEND=noninteractive
 # needrestart в неинтерактивный режим, чтобы apt не подвисал на диалогах (24.04)
@@ -139,6 +144,21 @@ if [[ "$ENABLE_CREATE_USER" -eq 1 ]]; then
             while IFS= read -r k; do install_key "$k"; done < "$PUBKEY_SRC"
         fi
         log "✅ SSH-ключи из PUBKEY_SRC добавлены"
+    fi
+
+    # Если ключей всё ещё нет — генерируем пару на сервере
+    if [[ ! -s "$AUTH_KEYS" && "$GENERATE_SSH_KEY" -eq 1 ]]; then
+        GEN_KEY="$USER_HOME/.ssh/id_${SSH_KEY_TYPE}"
+        if [[ ! -f "$GEN_KEY" ]]; then
+            log "Ключей нет — генерирую пару ${SSH_KEY_TYPE} для $NEW_USER..."
+            sudo -u "$NEW_USER" ssh-keygen -t "$SSH_KEY_TYPE" -N "" \
+                -C "${NEW_USER}@$(hostname)-generated" -f "$GEN_KEY"
+        fi
+        cat "${GEN_KEY}.pub" >> "$AUTH_KEYS"
+        log "✅ Сгенерирована пара ключей и публичный добавлен в authorized_keys"
+        log "🔑 ПРИВАТНЫЙ КЛЮЧ: $GEN_KEY"
+        log "⚠️ Скачайте его на свою машину и УДАЛИТЕ с сервера:"
+        log "   scp -P ${SSH_PORT} ${NEW_USER}@<IP>:${GEN_KEY} ~/.ssh/  &&  rm ${GEN_KEY}"
     fi
 
     chmod 600 "$AUTH_KEYS"
