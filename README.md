@@ -1,6 +1,14 @@
-# Скрипт настройки Ubuntu 24.04 LTS Server
+# Скрипты настройки Ubuntu 24.04 LTS Server
 
-Модульный bash-скрипт для быстрой и безопасной настройки Ubuntu 24.04 LTS серверов с возможностью выборочной установки компонентов.
+Набор bash-скриптов для быстрой и безопасной настройки Ubuntu 24.04 LTS серверов:
+
+| Скрипт | Назначение |
+|--------|------------|
+| [`start_server.sh`](start_server.sh) | Модульная первоначальная настройка и хардненинг сервера |
+| [`docker_install.sh`](docker_install.sh) | Установка Docker CE из официального репозитория |
+| [`install_nginx_letsencrypt_wordpress.sh`](install_nginx_letsencrypt_wordpress.sh) | Nginx + Let's Encrypt как reverse-proxy для WordPress в Docker |
+
+Основной скрипт `start_server.sh` — модульный, с возможностью выборочной установки компонентов.
 
 ## Возможности
 
@@ -107,3 +115,45 @@ systemctl status unattended-upgrades
 - Убедитесь, что вы добавили SSH-ключи перед отключением аутентификации по паролю
 - После настройки SSH проверьте доступ через новый порт перед закрытием текущей сессии
 - Сохраните настройки доступа в надежном месте
+
+## Дополнительные скрипты
+
+### Docker (`docker_install.sh`)
+
+Устанавливает Docker CE из официального apt-репозитория (Engine, CLI, containerd, buildx и compose-plugin). Идемпотентен — повторный запуск ничего не ломает.
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/zvnic/script_install_server_ubuntu/main/docker_install.sh
+chmod +x docker_install.sh
+sudo ./docker_install.sh
+```
+
+После установки перезайдите в сессию (или `newgrp docker`), чтобы применить членство в группе `docker`. Команда Compose — `docker compose` (v2).
+
+### Nginx + Let's Encrypt для WordPress (`install_nginx_letsencrypt_wordpress.sh`)
+
+Настраивает Nginx как reverse-proxy с TLS-сертификатом Let's Encrypt для WordPress, запущенного в Docker-контейнере. Домен и email задаются аргументами или переменными окружения (без правки файла).
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/zvnic/script_install_server_ubuntu/main/install_nginx_letsencrypt_wordpress.sh
+chmod +x install_nginx_letsencrypt_wordpress.sh
+
+# аргументами: <домен> <email> [порт_контейнера]
+sudo ./install_nginx_letsencrypt_wordpress.sh example.com admin@example.com 8080
+
+# или через переменные окружения:
+sudo DOMAIN=example.com EMAIL=admin@example.com WP_CONTAINER_PORT=8080 \
+    ./install_nginx_letsencrypt_wordpress.sh
+```
+
+Параметры:
+
+| Параметр | По умолчанию | Описание |
+|----------|--------------|----------|
+| `DOMAIN` | — (обязателен) | Домен сайта |
+| `EMAIL` | — (обязателен) | Email для Let's Encrypt |
+| `WP_CONTAINER_PORT` | `8080` | Порт WordPress-контейнера на `127.0.0.1` |
+| `WP_CONTAINER_NAME` | `wordpress` | Имя Docker-контейнера для проверки |
+| `INCLUDE_WWW` | `1` | Выпускать сертификат и на `www.<домен>` (если есть DNS) |
+
+**Перед запуском** убедитесь, что DNS-запись домена указывает на IP сервера, а WordPress-контейнер слушает `127.0.0.1:<порт>`. Автообновление сертификатов работает через штатный `certbot.timer` (отдельный cron не создаётся).

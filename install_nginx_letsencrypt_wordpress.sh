@@ -1,81 +1,87 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# Nginx + Let's Encrypt (Certbot) как reverse-proxy для WordPress в Docker.
+# Ubuntu 24.04 LTS. Идемпотентно: повторный запуск безопасен.
+#
+# Использование:
+#   sudo ./install_nginx_letsencrypt_wordpress.sh <домен> <email> [порт_контейнера]
+# или через переменные окружения:
+#   sudo DOMAIN=example.com EMAIL=admin@example.com ./install_nginx_letsencrypt_wordpress.sh
 
-# Скрипт установки Nginx и Let's Encrypt для WordPress в Docker
-# Для домена: domain.ru
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
-set -e
+# ======== ПАРАМЕТРЫ (env или аргументы) ========
+DOMAIN="${1:-${DOMAIN:-}}"
+EMAIL="${2:-${EMAIL:-}}"
+WP_CONTAINER_PORT="${3:-${WP_CONTAINER_PORT:-8080}}"  # порт WordPress-контейнера на localhost
+WP_CONTAINER_NAME="${WP_CONTAINER_NAME:-wordpress}"
+INCLUDE_WWW="${INCLUDE_WWW:-1}"   # 1 = выпускать сертификат и на www.<домен>
 
-# Параметры
-DOMAIN="domain.ru"
-EMAIL="admin@${DOMAIN}" # Измените на свой реальный email
-WP_CONTAINER_NAME="wordpress"
-WP_CONTAINER_PORT="80"  # Порт, на котором работает WordPress в Docker
+# Цвета
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+log()     { echo -e "${GREEN}[INFO]${NC} $1"; }
+warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+error()   { echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
 
-# Цвета для вывода
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+# ======== ПРОВЕРКИ ========
+[[ "$(id -u)" -eq 0 ]] || error "Запустите с правами root: sudo $0 <домен> <email>"
 
-# Функция логирования
-log() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+[[ -n "$DOMAIN" ]] || error "Не задан домен. Пример: sudo $0 example.com admin@example.com"
+[[ "$DOMAIN" != "domain.ru" ]] || error "Замените домен-заглушку 'domain.ru' на реальный."
+[[ "$DOMAIN" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]] || error "Некорректный домен: $DOMAIN"
 
-warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
+[[ -n "$EMAIL" ]] || error "Не задан email для Let's Encrypt."
+[[ "$EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]] || error "Некорректный email: $EMAIL"
 
-error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-    exit 1
-}
-
-# Проверка прав суперпользователя
-if [ "$EUID" -ne 0 ]; then
-    error "Скрипт должен быть запущен с правами суперпользователя (sudo)."
+# Сертификат запрашиваем на домен и (опц.) www — только если для www есть DNS-запись
+CERT_DOMAINS=(-d "$DOMAIN")
+if [[ "$INCLUDE_WWW" -eq 1 ]]; then
+    if getent hosts "www.$DOMAIN" &>/dev/null || host "www.$DOMAIN" &>/dev/null; then
+        CERT_DOMAINS+=(-d "www.$DOMAIN")
+    else
+        warning "DNS-запись для www.$DOMAIN не найдена — сертификат будет только для $DOMAIN."
+    fi
 fi
 
-log "Начинаем настройку Nginx и Let's Encrypt для домена $DOMAIN..."
+log "Настройка Nginx + Let's Encrypt для домена $DOMAIN..."
 
-# Обновление системы
-log "Обновление пакетов..."
-apt update && apt upgrade -y || error "Не удалось обновить пакеты."
+# ======== УСТАНОВКА ПАКЕТОВ ========
+log "Обновление списка пакетов..."
+apt-get update -y || error "apt-get update не удался."
 
-# Установка Nginx и зависимостей для Let's Encrypt
-log "Установка Nginx и необходимых пакетов..."
-apt install -y nginx curl software-properties-common gnupg2 ca-certificates lsb-release debian-archive-keyring || error "Не удалось установить необходимые пакеты."
+log "Установка Nginx и Certbot..."
+apt-get install -y --no-install-recommends \
+    nginx curl ca-certificates certbot python3-certbot-nginx bind9-host \
+    || error "Не удалось установить пакеты."
 
-# Настройка базовой конфигурации Nginx (только HTTP)
-log "Настройка базовой HTTP конфигурации Nginx..."
-cat > /etc/nginx/sites-available/${DOMAIN} << EOF
+# ======== БАЗОВАЯ HTTP-КОНФИГУРАЦИЯ ========
+log "Создание HTTP-конфигурации Nginx..."
+cat > "/etc/nginx/sites-available/${DOMAIN}" << EOF
 server {
     listen 80;
     listen [::]:80;
     server_name ${DOMAIN} www.${DOMAIN};
 
+    client_max_body_size 64M;
+
     location / {
-        proxy_pass http://localhost:${WP_CONTAINER_PORT};
+        proxy_pass http://127.0.0.1:${WP_CONTAINER_PORT};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header X-Forwarded-Host \$host;
         proxy_set_header X-Forwarded-Port \$server_port;
-        
-        # Настройки для больших файлов WordPress
-        client_max_body_size 50M;
-        
-        # Настройки таймаутов
+
         proxy_connect_timeout 300;
         proxy_send_timeout 300;
         proxy_read_timeout 300;
         send_timeout 300;
     }
-    
-    # Дополнительные настройки для WordPress
-    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
-        proxy_pass http://localhost:${WP_CONTAINER_PORT};
+
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)\$ {
+        proxy_pass http://127.0.0.1:${WP_CONTAINER_PORT};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         access_log off;
@@ -85,127 +91,90 @@ server {
 }
 EOF
 
-# Создание символической ссылки для активации конфигурации
-ln -sf /etc/nginx/sites-available/${DOMAIN} /etc/nginx/sites-enabled/ || error "Не удалось создать символическую ссылку."
+ln -sf "/etc/nginx/sites-available/${DOMAIN}" /etc/nginx/sites-enabled/
+[[ -e /etc/nginx/sites-enabled/default ]] && rm -f /etc/nginx/sites-enabled/default
 
-# Удаление дефолтного конфига, если он существует
-if [ -f /etc/nginx/sites-enabled/default ]; then
-    log "Удаление дефолтной конфигурации Nginx..."
-    rm /etc/nginx/sites-enabled/default
-fi
-
-# Проверка конфигурации Nginx
 log "Проверка конфигурации Nginx..."
 nginx -t || error "Ошибка в конфигурации Nginx."
+systemctl reload nginx || systemctl restart nginx || error "Не удалось перезапустить Nginx."
 
-# Перезапуск Nginx
-log "Перезапуск Nginx..."
-systemctl restart nginx || error "Не удалось перезапустить Nginx."
+# ======== ПОЛУЧЕНИЕ СЕРТИФИКАТА ========
+log "Запрос SSL-сертификата у Let's Encrypt..."
+if certbot --nginx "${CERT_DOMAINS[@]}" --non-interactive --agree-tos \
+        --email "$EMAIL" --redirect; then
+    log "Сертификат получен и HTTP->HTTPS редирект настроен certbot'ом."
+else
+    warning "Не удалось получить сертификат. Проверьте DNS ($DOMAIN -> IP сервера), порт 80 и логи /var/log/letsencrypt/."
+fi
 
-# Установка Certbot для Let's Encrypt
-log "Установка Certbot для Let's Encrypt..."
-apt install -y certbot python3-certbot-nginx || error "Не удалось установить Certbot."
-
-# Получение SSL сертификата
-log "Получение SSL сертификата от Let's Encrypt..."
-certbot --nginx -d ${DOMAIN} -d www.${DOMAIN} --non-interactive --agree-tos --email ${EMAIL} --redirect || warning "Не удалось получить SSL сертификат. Возможно, проблемы с DNS или доступом к домену."
-
-# Проверяем успешность установки сертификата
-if [ -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
-    log "SSL-сертификат успешно установлен."
-    
-    # Добавляем улучшенные настройки HTTPS
-    log "Настройка оптимизированной HTTPS конфигурации..."
-    
-    # Создаем файл с оптимизированными параметрами SSL
-    cat > /etc/nginx/conf.d/ssl-params.conf << EOF
-# Оптимизированные параметры SSL
-ssl_session_timeout 1d;
-ssl_session_cache shared:SSL:10m;
-ssl_session_tickets off;
-
-# Современные настройки безопасности
-ssl_protocols TLSv1.2 TLSv1.3;
-ssl_prefer_server_ciphers off;
-
-# OCSP stapling
-ssl_stapling on;
-ssl_stapling_verify on;
-resolver 8.8.8.8 8.8.4.4 valid=300s;
-resolver_timeout 5s;
-
-# Заголовки безопасности
-add_header Strict-Transport-Security "max-age=63072000" always;
-add_header X-Content-Type-Options nosniff;
-add_header X-Frame-Options SAMEORIGIN;
-add_header X-XSS-Protection "1; mode=block";
+# ======== ХАРДНЕНИНГ HTTPS ========
+if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
+    log "Добавление заголовков безопасности..."
+    # Только то, что НЕ дублирует certbot options-ssl-nginx.conf (ssl_protocols/ciphers и т.п.)
+    cat > /etc/nginx/conf.d/security-headers.conf << 'EOF'
+# Заголовки безопасности (HSTS включаем после проверки, что HTTPS стабилен)
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 EOF
 
-    log "Проверка обновленной конфигурации Nginx..."
-    nginx -t || warning "Ошибка в обновленной конфигурации Nginx. Откатываемся к базовой конфигурации."
-    
-    log "Перезагрузка Nginx с новыми параметрами..."
-    systemctl restart nginx || warning "Не удалось перезапустить Nginx с новыми параметрами."
-    
-    # Добавляем настройки для WordPress в контейнере для работы с HTTPS
-    log "Проверка настроек WordPress для HTTPS..."
-    echo ""
-    log "ВАЖНО: После настройки Nginx и Let's Encrypt, не забудьте настроить WordPress для корректной работы с HTTPS:"
-    echo "1. Войдите в админ-панель WordPress"
-    echo "2. Перейдите в 'Настройки' -> 'Общие'"
-    echo "3. Измените 'Адрес WordPress (URL)' и 'Адрес сайта (URL)' на https://${DOMAIN}"
-    echo "4. Сохраните изменения"
-else
-    warning "SSL-сертификат не был установлен. Проверьте логи и DNS-настройки."
-fi
-
-# Настройка автообновления сертификатов
-log "Настройка автоматического обновления сертификатов..."
-echo "0 3 * * * root certbot renew --quiet --post-hook 'systemctl reload nginx'" > /etc/cron.d/certbot-renew
-chmod 644 /etc/cron.d/certbot-renew
-
-# Настройка брандмауэра
-log "Настройка брандмауэра..."
-if command -v ufw &>/dev/null; then
-    ufw allow 'Nginx Full' || warning "Не удалось настроить UFW."
-    ufw allow ssh || warning "Не удалось открыть SSH порт в UFW."
-    # Включаем UFW, если он еще не включен
-    if ! ufw status | grep -q "Status: active"; then
-        ufw --force enable || warning "Не удалось включить UFW."
+    if nginx -t; then
+        systemctl reload nginx
+        log "Заголовки безопасности применены."
+    else
+        warning "Ошибка конфигурации — откатываю заголовки безопасности."
+        rm -f /etc/nginx/conf.d/security-headers.conf
+        nginx -t && systemctl reload nginx || true
     fi
+
+    cat << EOF
+
+${YELLOW}=== Настройте WordPress для HTTPS ===${NC}
+1. Админка -> Настройки -> Общие
+2. 'Адрес WordPress' и 'Адрес сайта' -> https://${DOMAIN}
+3. В wp-config.php при работе за прокси добавьте:
+   if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO']==='https') \$_SERVER['HTTPS']='on';
+EOF
 else
-    warning "UFW не установлен. Рекомендуется установить и настроить брандмауэр."
+    warning "Каталог сертификата не найден — пропускаю HTTPS-хардненинг."
 fi
 
-log "Установка и настройка завершена!"
-log "WordPress доступен по адресу: https://${DOMAIN}"
+# ======== АВТООБНОВЛЕНИЕ СЕРТИФИКАТОВ ========
+# Certbot из apt уже ставит systemd-таймер (certbot.timer) — отдельный cron не нужен.
+# Добавляем только deploy-hook для перезагрузки Nginx после обновления.
+log "Настройка перезагрузки Nginx после обновления сертификата..."
+install -d /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'EOF'
+#!/usr/bin/env bash
+systemctl reload nginx
+EOF
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+# На случай ручного cron-задания из старых версий — убираем дубль
+rm -f /etc/cron.d/certbot-renew
+systemctl enable --now certbot.timer 2>/dev/null || true
 
-# Проверка WordPress-контейнера
-if docker ps | grep -q "${WP_CONTAINER_NAME}"; then
-    log "WordPress контейнер ${WP_CONTAINER_NAME} запущен и готов к работе."
+# ======== ФАЙРВОЛ ========
+if command -v ufw &>/dev/null; then
+    log "Открываю порты Nginx в UFW..."
+    ufw allow 'Nginx Full' || warning "Не удалось настроить UFW для Nginx."
 else
-    warning "WordPress контейнер ${WP_CONTAINER_NAME} не найден или не запущен."
-    log "Убедитесь, что Docker-контейнер с WordPress запущен и работает на порту ${WP_CONTAINER_PORT}."
+    warning "UFW не установлен — настройте файрвол отдельно."
 fi
 
+# ======== ПРОВЕРКА КОНТЕЙНЕРА ========
+if command -v docker &>/dev/null && docker ps --format '{{.Names}}' | grep -qx "${WP_CONTAINER_NAME}"; then
+    log "Контейнер ${WP_CONTAINER_NAME} запущен."
+else
+    warning "Контейнер ${WP_CONTAINER_NAME} не найден. Убедитесь, что WordPress слушает 127.0.0.1:${WP_CONTAINER_PORT}."
+fi
+
+log "Готово! Сайт: https://${DOMAIN}"
 cat << EOF
 
-${GREEN}=== Дополнительная информация ===${NC}
-1. Убедитесь, что DNS записи для ${DOMAIN} и www.${DOMAIN} корректно настроены и указывают на IP адрес вашего сервера
-2. Проверьте, что WordPress контейнер запущен и доступен по адресу localhost:${WP_CONTAINER_PORT}
-3. Если есть проблемы с доступом к WordPress, проверьте логи:
-   - Nginx: /var/log/nginx/error.log
-   - Let's Encrypt: /var/log/letsencrypt/letsencrypt.log
-
-${YELLOW}=== Важно ===${NC}
-Чтобы проверить SSL сертификаты:
-  certbot certificates
-
-Для обновления сертификатов вручную:
-  certbot renew --dry-run
-
-Для просмотра логов Nginx:
-  tail -f /var/log/nginx/access.log
-  tail -f /var/log/nginx/error.log
-
+${GREEN}=== Полезные команды ===${NC}
+  certbot certificates              # статус сертификатов
+  certbot renew --dry-run           # тест автообновления
+  systemctl status certbot.timer    # таймер автообновления
+  tail -f /var/log/nginx/error.log  # логи Nginx
 EOF
