@@ -154,9 +154,11 @@ if [[ "$ENABLE_CREATE_USER" -eq 1 ]]; then
         unset p1 p2
     fi
 
+    PASSWORD_SET=0
     if [[ -n "$USER_PASSWORD" ]]; then
         echo "${NEW_USER}:${USER_PASSWORD}" | chpasswd
-        unset USER_PASSWORD
+        USER_PASSWORD=""   # очищаем секрет, но переменную не unset'им (set -u)
+        PASSWORD_SET=1
         log "✅ Пароль для $NEW_USER установлен (sudo будет запрашивать его)"
     fi
 
@@ -173,7 +175,7 @@ if [[ "$ENABLE_CREATE_USER" -eq 1 ]]; then
         fi
     fi
 
-    if [[ -z "$USER_PASSWORD" && "$SUDO_NOPASSWD" -ne 1 ]]; then
+    if [[ "$PASSWORD_SET" -ne 1 && "$SUDO_NOPASSWD" -ne 1 ]]; then
         log "⚠️ У $NEW_USER нет пароля и не задан NOPASSWD — sudo работать не будет."
         log "   Задайте USER_PASSWORD или SUDO_NOPASSWD=1, либо вручную: passwd $NEW_USER"
     fi
