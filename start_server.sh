@@ -53,7 +53,10 @@ GENERATE_SSH_KEY=1
 SSH_KEY_TYPE="ed25519"              # тип генерируемого ключа
 
 # Пользователь создаётся без пароля (вход по ключу). Для рабочего sudo нужно одно из:
-USER_PASSWORD=""                    # задать пароль пользователю (sudo будет спрашивать его)
+#   * оставить USER_PASSWORD пустым — пароль будет ЗАПРОШЕН интерактивно (рекомендуется);
+#   * задать USER_PASSWORD заранее (для автоматизации/CI — пароль в скрипте, менее безопасно);
+#   * SUDO_NOPASSWD=1 — sudo без пароля (пароль не нужен).
+USER_PASSWORD=""                    # необязательно: задать пароль заранее (иначе спросим)
 SUDO_NOPASSWD=0                     # 1 = sudo без пароля через /etc/sudoers.d/<user>
 
 # ======== СЛУЖЕБНОЕ ========
@@ -132,9 +135,28 @@ if [[ "$ENABLE_CREATE_USER" -eq 1 ]]; then
         log "✅ Пользователь $NEW_USER добавлен в группу sudo"
     fi
 
-    # Пароль пользователя (нужен для sudo, если не используется NOPASSWD)
+    # Пароль пользователя (нужен для sudo, если не используется NOPASSWD).
+    # Приоритет: заданный USER_PASSWORD > интерактивный запрос. В лог пароль не пишем.
+    if [[ -z "$USER_PASSWORD" && "$SUDO_NOPASSWD" -ne 1 && "$NONINTERACTIVE" -ne 1 ]]; then
+        while true; do
+            read -rsp "Введите пароль для пользователя $NEW_USER (Enter — пропустить): " p1; echo
+            if [[ -z "$p1" ]]; then
+                log "Пароль не задан — пропускаем (sudo не будет работать без пароля/NOPASSWD)"
+                break
+            fi
+            read -rsp "Повторите пароль: " p2; echo
+            if [[ "$p1" == "$p2" ]]; then
+                USER_PASSWORD="$p1"
+                break
+            fi
+            echo "Пароли не совпадают, попробуйте снова."
+        done
+        unset p1 p2
+    fi
+
     if [[ -n "$USER_PASSWORD" ]]; then
         echo "${NEW_USER}:${USER_PASSWORD}" | chpasswd
+        unset USER_PASSWORD
         log "✅ Пароль для $NEW_USER установлен (sudo будет запрашивать его)"
     fi
 
