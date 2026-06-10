@@ -52,6 +52,10 @@ PUBKEY_SRC=""
 GENERATE_SSH_KEY=1
 SSH_KEY_TYPE="ed25519"              # тип генерируемого ключа
 
+# Пользователь создаётся без пароля (вход по ключу). Для рабочего sudo нужно одно из:
+USER_PASSWORD=""                    # задать пароль пользователю (sudo будет спрашивать его)
+SUDO_NOPASSWD=0                     # 1 = sudo без пароля через /etc/sudoers.d/<user>
+
 # ======== СЛУЖЕБНОЕ ========
 export DEBIAN_FRONTEND=noninteractive
 # needrestart в неинтерактивный режим, чтобы apt не подвисал на диалогах (24.04)
@@ -115,10 +119,41 @@ if [[ "$ENABLE_CREATE_USER" -eq 1 ]]; then
     if id "$NEW_USER" &>/dev/null; then
         log "Пользователь $NEW_USER уже существует — пропускаем создание"
     else
-        # --disabled-password: вход только по ключу; пароль при необходимости задайте позже
+        # --disabled-password: вход только по ключу; пароль настраивается ниже
         adduser --disabled-password --gecos "" "$NEW_USER"
+        log "✅ Пользователь $NEW_USER создан"
+    fi
+
+    # Членство в sudo гарантируем всегда (в т.ч. для уже существующего пользователя)
+    if id -nG "$NEW_USER" | grep -qw sudo; then
+        log "Пользователь $NEW_USER уже в группе sudo"
+    else
         usermod -aG sudo "$NEW_USER"
-        log "✅ Пользователь $NEW_USER создан и добавлен в sudo"
+        log "✅ Пользователь $NEW_USER добавлен в группу sudo"
+    fi
+
+    # Пароль пользователя (нужен для sudo, если не используется NOPASSWD)
+    if [[ -n "$USER_PASSWORD" ]]; then
+        echo "${NEW_USER}:${USER_PASSWORD}" | chpasswd
+        log "✅ Пароль для $NEW_USER установлен (sudo будет запрашивать его)"
+    fi
+
+    # sudo без пароля (для автоматизации; менее безопасно)
+    if [[ "$SUDO_NOPASSWD" -eq 1 ]]; then
+        echo "${NEW_USER} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${NEW_USER}"
+        chmod 440 "/etc/sudoers.d/${NEW_USER}"
+        # Проверка валидности sudoers — иначе откатываем, чтобы не сломать sudo
+        if visudo -cf "/etc/sudoers.d/${NEW_USER}" &>/dev/null; then
+            log "✅ Настроен sudo без пароля для $NEW_USER (/etc/sudoers.d/${NEW_USER})"
+        else
+            rm -f "/etc/sudoers.d/${NEW_USER}"
+            log "❌ Ошибка в sudoers — правило NOPASSWD удалено"
+        fi
+    fi
+
+    if [[ -z "$USER_PASSWORD" && "$SUDO_NOPASSWD" -ne 1 ]]; then
+        log "⚠️ У $NEW_USER нет пароля и не задан NOPASSWD — sudo работать не будет."
+        log "   Задайте USER_PASSWORD или SUDO_NOPASSWD=1, либо вручную: passwd $NEW_USER"
     fi
 
     USER_HOME="$(getent passwd "$NEW_USER" | cut -d: -f6)"
